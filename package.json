@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon index.js",
     "start": "node index.js",
-    "smee": "smee -u https://smee.io/JNqG6ifuJktWxq52 -t http://localhost:3000/process-audio",
+    "smee": "smee -u https://smee.io/c5WMKIwWyDM3f83S -t http://localhost:3000/process-audio",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

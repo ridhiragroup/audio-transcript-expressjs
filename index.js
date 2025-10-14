@@ -64,7 +64,9 @@ app.get("/hello", (req, res) => {
 });
 
 app.post('/process-audio', async (req, res) => {
-    console.log('Received new request to /process-audio');
+    console.log(`Received new request to /process-audio`);
+    const { Call_Record_ID, Call_Recording_URL } = req.body;
+    console.log(`Received new request to /process-audio ${Call_Record_ID} ${Call_Recording_URL}`);
     let tempFilePath = null;
 
     try {
@@ -161,28 +163,89 @@ app.post('/process-audio', async (req, res) => {
 
         const accessToken = await getZohoAccessToken();
 
-        // Update Zoho CRM with the transcription
+        // Optionally generate AI analysis text
+        const analysisEnabled = (process.env.ANALYSIS_ENABLED || 'true').toLowerCase() === 'true';
+        const analysisModel = process.env.OPENAI_ANALYSIS_MODEL || 'gpt-4o-mini';
+
+        let analysisText = null;
+        if (analysisEnabled) {
+            try {
+                console.log('Generating AI analysis for transcript...');
+                const maxTranscriptChars = Number(process.env.ANALYSIS_MAX_CHARS || 16000);
+                const transcriptForAnalysis = (transcriptText || '').slice(0, maxTranscriptChars);
+
+                const prompt = `You are a sales call analyst. Summarize the call and extract key insights for a sales team in a compact, readable block. Keep it under 1200 characters. Use exactly this format and plain text only:\n\nSummary: <2–4 sentence recap>\nCustomer Sentiment: <Negative|Neutral|Positive>\nAgent Sentiment: <Negative|Neutral|Positive>\nKey Topics: <comma-separated>\nObjections: <short list>\nNext Steps: <bulleted or comma-separated>\nOutcome: <No Decision|Follow-up Needed|Qualified|Unqualified|Closed Won|Closed Lost>\nNotes: <optional short notes>\n\nTranscript:\n"""${transcriptForAnalysis}"""`;
+
+                const completion = await openai.chat.completions.create({
+                    model: analysisModel,
+                    messages: [
+                        { role: 'system', content: 'Return concise, sales-ready analysis as plain text. Do not include JSON. Follow the requested headings exactly.' },
+                        { role: 'user', content: prompt },
+                    ],
+                    temperature: 0.3,
+                    max_tokens: 600,
+                });
+                analysisText = (completion.choices?.[0]?.message?.content || '').trim();
+                if (analysisText && analysisText.length > 1200) {
+                    analysisText = analysisText.slice(0, 1190) + '…';
+                }
+                console.log('AI analysis generated.');
+            } catch (analysisError) {
+                console.warn('Analysis generation failed. Proceeding without AI_Analysis field.', analysisError.message);
+            }
+        }
+
+        // Update Zoho CRM with the transcription (+ optional analysis)
         const moduleApiName = 'Calls';
 
 
         console.log(`Updating Zoho CRM module '${moduleApiName}' record ${Call_Record_ID} with transcription...`);
 
-        const zohoResponse = await axios.put(
-            `${process.env.ZOHO_API_DOMAIN}/${moduleApiName}/${Call_Record_ID}`,
-            {
-                data: [
-                    {
-                        "Description": transcriptText,
-                    },
-                ],
-            },
-            {
-                headers: {
-                    Authorization: `Zoho-oauthtoken ${accessToken}`,
-                    'Content-Type': 'application/json',
+        const basePayload = {
+            data: [
+                {
+                    "Description": transcriptText,
                 },
+            ],
+        };
+
+        if (analysisText) {
+            basePayload.data[0]["AI_Analysis"] = analysisText;
+        }
+
+        let zohoResponse;
+        try {
+            zohoResponse = await axios.put(
+                `${process.env.ZOHO_API_DOMAIN}/${moduleApiName}/${Call_Record_ID}`,
+                basePayload,
+                {
+                    headers: {
+                        Authorization: `Zoho-oauthtoken ${accessToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                }
+            );
+        } catch (zErr) {
+            // If Zoho rejects unknown field AI_Analysis, retry with Description only
+            const zohoErrData = zErr.response?.data;
+            const isFieldError = JSON.stringify(zohoErrData || {}).toLowerCase().includes('ai_analysis');
+            if (analysisText && isFieldError) {
+                console.warn('Zoho rejected AI_Analysis field. Retrying with Description only...');
+                const fallbackPayload = { data: [ { "Description": transcriptText } ] };
+                zohoResponse = await axios.put(
+                    `${process.env.ZOHO_API_DOMAIN}/${moduleApiName}/${Call_Record_ID}`,
+                    fallbackPayload,
+                    {
+                        headers: {
+                            Authorization: `Zoho-oauthtoken ${accessToken}`,
+                            'Content-Type': 'application/json',
+                        },
+                    }
+                );
+            } else {
+                throw zErr;
             }
-        );
+        }
 
         console.log('Zoho CRM API Response:', JSON.stringify(zohoResponse.data, null, 2));
 
