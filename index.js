@@ -6,6 +6,7 @@ const OpenAI = require('openai');
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
+const multer = require('multer');
 require('dotenv').config();
 
 const app = express();
@@ -15,6 +16,15 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
 app.use(express.text({ type: 'text/plain', limit: '50mb' }));
+
+// Configure multer for multipart/form-data (needed for Zoho form-data)
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: {
+        fieldSize: 50 * 1024 * 1024, // 50MB limit
+        fileSize: 50 * 1024 * 1024   // 50MB limit
+    }
+});
 
 // Debug middleware to log request details
 app.use((req, res, next) => {
@@ -276,7 +286,7 @@ app.get("/hello", (req, res) => {
 });
 
 // Fallback endpoint for different webhook formats
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', upload.none(), async (req, res) => {
     console.log('Fallback webhook endpoint called');
     // Forward to the main processing endpoint
     req.url = '/process-audio';
@@ -352,7 +362,7 @@ app.get('/request/:requestId', (req, res) => {
     }
 });
 
-app.post('/process-audio', async (req, res) => {
+app.post('/process-audio', upload.none(), async (req, res) => {
     console.log(`🎯 Received new request to /process-audio`);
     
     // Generate unique request ID
@@ -397,18 +407,48 @@ async function processAudioRequest(requestBody, requestId) {
         // Handle different request body formats
         let requestData = null;
         
+        console.log(`🔍 [${requestId}] Raw request body:`, requestBody);
+        console.log(`🔍 [${requestId}] Body type:`, typeof requestBody);
+        console.log(`🔍 [${requestId}] Body keys:`, requestBody ? Object.keys(requestBody) : 'null');
+        
         // Try to parse request body based on content type
         if (requestBody && typeof requestBody === 'object') {
-            requestData = requestBody;
+            // Check if it's form-data (from Zoho)
+            if (requestBody.Call_Record_ID && requestBody.Call_Recording_URL) {
+                requestData = requestBody;
+                console.log(`✅ [${requestId}] Found form-data format with Call_Record_ID and Call_Recording_URL`);
+            } else {
+                // Try to find the data in different possible locations
+                const possibleKeys = ['Call_Record_ID', 'Call_Recording_URL', 'call_record_id', 'call_recording_url', 'recordId', 'recordingUrl'];
+                let foundData = {};
+                let foundAny = false;
+                
+                for (const key of possibleKeys) {
+                    if (requestBody[key]) {
+                        foundData[key] = requestBody[key];
+                        foundAny = true;
+                    }
+                }
+                
+                if (foundAny) {
+                    requestData = foundData;
+                    console.log(`✅ [${requestId}] Found data with alternative keys:`, foundData);
+                } else {
+                    requestData = requestBody;
+                    console.log(`⚠️ [${requestId}] Using raw request body as-is:`, requestBody);
+                }
+            }
         } else if (typeof requestBody === 'string') {
             try {
                 requestData = JSON.parse(requestBody);
+                console.log(`✅ [${requestId}] Parsed JSON from string body`);
             } catch (parseError) {
                 console.log(`🔍 [${requestId}] Failed to parse JSON from string body:`, parseError.message);
                 // Try to parse as URL-encoded data
                 try {
                     const querystring = require('querystring');
                     requestData = querystring.parse(requestBody);
+                    console.log(`✅ [${requestId}] Parsed as URL-encoded data`);
                 } catch (urlParseError) {
                     console.log(`🔍 [${requestId}] Failed to parse as URL-encoded:`, urlParseError.message);
                     requestData = null;
