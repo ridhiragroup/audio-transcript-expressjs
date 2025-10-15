@@ -70,7 +70,6 @@ app.post('/process-audio', async (req, res) => {
     let tempFilePath = null;
 
     try {
-        const { Call_Record_ID, Call_Recording_URL } = req.body; 
 
         if (!Call_Record_ID || !Call_Recording_URL) {
             return res.status(400).json({ error: 'Missing required fields: id and recordingUrl' });
