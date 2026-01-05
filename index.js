@@ -546,11 +546,67 @@ async function processAudioRequest(requestBody, requestId) {
         console.log(`Audio saved temporarily to: ${tempFilePath}`);
 
         console.log(`🎤 [${requestId}] Sending audio to OpenAI Whisper for transcription...`);
-        const transcription = await openai.audio.transcriptions.create({
-            model: 'whisper-1',
-            file: fs.createReadStream(tempFilePath),
-        });
-        const transcriptText = transcription.text;
+
+        // Check if translation to English is requested
+        const translateRequested = Boolean(
+            (requestData && (requestData.translate === true || requestData.translate === 'true' || requestData.translate === '1')) ||
+            (process.env.DEFAULT_TRANSCRIBE_TRANSLATE === 'true')
+        );
+
+        let transcriptText;
+
+        if (translateRequested) {
+            // Use the TRANSLATIONS endpoint to translate to English
+            console.log(`🌐 [${requestId}] Translation to English ENABLED - using audio.translations endpoint`);
+            
+            const translationOptions = {
+                model: 'whisper-1',
+                file: fs.createReadStream(tempFilePath),
+            };
+
+            console.log(`🔧 [${requestId}] Translation options:`, {
+                model: translationOptions.model,
+                fileSize: fs.statSync(tempFilePath).size
+            });
+
+            console.log(`📤 [${requestId}] Calling OpenAI Whisper TRANSLATION API (will auto-detect language and translate to English)...`);
+            const translation = await openai.audio.translations.create(translationOptions);
+            transcriptText = translation.text;
+            console.log(`✅ [${requestId}] Whisper Translation API returned English transcript (${transcriptText.length} chars):`);
+            console.log(`📝 [${requestId}] English transcript preview:`, transcriptText.substring(0, 200));
+
+        } else {
+            // Use the TRANSCRIPTIONS endpoint (original language)
+            console.log(`🌐 [${requestId}] Translation DISABLED - transcribing in original language`);
+            
+            const transcriptionOptions = {
+                model: 'whisper-1',
+                file: fs.createReadStream(tempFilePath),
+            };
+
+            // Set explicit language if provided
+            if (requestData && requestData.language) {
+                transcriptionOptions.language = requestData.language; // e.g. 'ta' for Tamil, 'ur' for Urdu
+                console.log(`📌 [${requestId}] Language explicitly set to: ${requestData.language}`);
+            } else if (process.env.DEFAULT_TRANSCRIBE_LANGUAGE) {
+                transcriptionOptions.language = process.env.DEFAULT_TRANSCRIBE_LANGUAGE;
+                console.log(`📌 [${requestId}] Language from env: ${process.env.DEFAULT_TRANSCRIBE_LANGUAGE}`);
+            } else {
+                console.log(`📌 [${requestId}] Language: auto-detect`);
+            }
+
+            console.log(`🔧 [${requestId}] Transcription options:`, {
+                model: transcriptionOptions.model,
+                language: transcriptionOptions.language || 'auto-detect',
+                fileSize: fs.statSync(tempFilePath).size
+            });
+
+            console.log(`📤 [${requestId}] Calling OpenAI Whisper TRANSCRIPTION API...`);
+            const transcription = await openai.audio.transcriptions.create(transcriptionOptions);
+            transcriptText = transcription.text;
+            console.log(`✅ [${requestId}] Whisper Transcription API returned transcript (${transcriptText.length} chars):`);
+            console.log(`📝 [${requestId}] Transcript preview:`, transcriptText.substring(0, 200));
+        }
         console.log(`📝 [${requestId}] Transcription successful. Length: ${transcriptText.length} characters`);
 
         const accessToken = await getZohoAccessToken();
