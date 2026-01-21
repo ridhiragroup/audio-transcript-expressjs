@@ -9,6 +9,7 @@ This service processes audio recordings by transcribing them using OpenAI Whispe
 - 📊 Automatic Zoho CRM record updates
 - 🔄 Automatic Zoho OAuth token refresh
 - 🧹 Automatic cleanup of temporary files
+- 🔗 **Fallback flow**: Automatically fetches recording URLs from Zoho → Knowlarity when not provided in webhook
 
 ## Setup
 
@@ -31,6 +32,11 @@ ZOHO_CLIENT_ID=your_client_id
 ZOHO_CLIENT_SECRET=your_client_secret
 ZOHO_REFRESH_TOKEN=your_refresh_token
 
+# Knowlarity Configuration (required for fallback flow)
+KNOWLARITY_BASE_URL=https://kpi.knowlarity.com
+KNOWLARITY_API_KEY=your_knowlarity_api_key
+KNOWLARITY_AUTH_TOKEN=your_knowlarity_auth_token
+
 # Server Configuration
 PORT=3000
 ```
@@ -39,6 +45,22 @@ PORT=3000
 ```bash
 npm run dev
 ```
+
+## How It Works
+
+### Primary Flow (with Call_Recording_URL)
+1. Webhook receives `Call_Record_ID` and `Call_Recording_URL`
+2. Downloads audio from the provided URL
+3. Transcribes using OpenAI Whisper
+4. Optionally generates AI analysis
+5. Updates Zoho CRM record
+
+### Fallback Flow (without Call_Recording_URL)
+When `Call_Recording_URL` is missing:
+1. Fetches call record from Zoho CRM using `Call_Record_ID`
+2. Extracts UUID from `Voice_Recording__s` field
+3. Calls Knowlarity API with UUID to get `secured_recording_url`
+4. Continues with transcription and CRM update
 
 ## API Endpoints
 
@@ -49,17 +71,29 @@ Processes an audio file from a URL, transcribes it, and updates Zoho CRM.
 **Request Body:**
 ```json
 {
-  "id": "5924956000162702001",
-  "recordingUrl": "https://example.com/audio.mp3"
+  "Call_Record_ID": "5924956000162702001",
+  "Call_Recording_URL": "https://example.com/audio.mp3"
 }
 ```
+
+**Note:** `Call_Recording_URL` is optional. If not provided, the service will:
+1. Fetch the call record from Zoho CRM using `Call_Record_ID`
+2. Extract UUID from `Voice_Recording__s` field
+3. Call Knowlarity API to get `secured_recording_url`
+4. Use that URL for transcription
+
+**Alternative key names supported:**
+- `call_record_id` / `recordId` (instead of `Call_Record_ID`)
+- `call_recording_url` / `recordingUrl` (instead of `Call_Recording_URL`)
 
 **Response:**
 ```json
 {
   "message": "Audio transcribed and CRM updated successfully.",
   "recordId": "5924956000162702001",
-  "transcript": "The transcribed text..."
+  "transcript": "The transcribed text...",
+  "requestId": "req_1234567890_abc123",
+  "processingTime": 15234
 }
 ```
 
@@ -87,6 +121,9 @@ Processes an audio file from a URL, transcribes it, and updates Zoho CRM.
      - `ZOHO_CLIENT_ID`
      - `ZOHO_CLIENT_SECRET`
      - `ZOHO_REFRESH_TOKEN`
+     - `KNOWLARITY_BASE_URL` (optional, defaults to https://kpi.knowlarity.com)
+     - `KNOWLARITY_API_KEY` (required for fallback flow)
+     - `KNOWLARITY_AUTH_TOKEN` (required for fallback flow)
      - `PORT` (Azure will set this automatically, but you can override)
 
 3. **Deploy your code:**
@@ -115,7 +152,10 @@ az webapp config appsettings set --resource-group audio-processor-rg --name your
   ZOHO_API_DOMAIN="https://www.zohoapis.com" \
   ZOHO_CLIENT_ID="your_id" \
   ZOHO_CLIENT_SECRET="your_secret" \
-  ZOHO_REFRESH_TOKEN="your_token"
+  ZOHO_REFRESH_TOKEN="your_token" \
+  KNOWLARITY_BASE_URL="https://kpi.knowlarity.com" \
+  KNOWLARITY_API_KEY="your_knowlarity_api_key" \
+  KNOWLARITY_AUTH_TOKEN="your_knowlarity_auth_token"
 
 # Deploy the code
 az webapp up --name your-app-name --resource-group audio-processor-rg
