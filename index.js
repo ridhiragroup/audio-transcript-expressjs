@@ -37,6 +37,18 @@ app.post('/process-audio', upload.none(), async (req, res) => {
     console.log("req body", req.body);
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
    
+    // Validate that Call_Record_ID is present (Call_Recording_URL is NOT required)
+    const callRecordId = req.body?.Call_Record_ID || req.body?.call_record_id || req.body?.recordId;
+    if (!callRecordId) {
+        console.error(`❌ Request ${requestId} rejected: Missing Call_Record_ID`);
+        return res.status(400).json({ 
+            error: 'Bad Request', 
+            message: 'Call_Record_ID is required. Call_Recording_URL is NOT required and will be fetched from Voice_Recording__s field.',
+            received: Object.keys(req.body || {}),
+            requestId 
+        });
+    }
+    
     try {
         const result = await processAudioRequest(req.body, requestId);
         console.log(`🎉 Request ${requestId} completed successfully`);
